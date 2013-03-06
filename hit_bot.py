@@ -133,7 +133,6 @@ def postComment(commentType, submission, optInfo = ""):
           return 0
         return editComment(commentType, commentText, comment)
         #comment.edit(commentText + "\n\n*Last updated: " + getTime() + "*")
-        return
     if (G_COMMENTS_ON != 1):
       return 0
     submission.add_comment(commentText)
