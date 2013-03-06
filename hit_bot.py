@@ -98,14 +98,17 @@ def editComment(commentType, commentText, comment):
     #I want to keep the entire message body
     #just new to update/add Last Updated reply
     addLastUpdateReply(comment)
+    return 0
   elif (keepBody == 2):
     #I need to keep the original body and prepend a new message
     comment.edit(getCommentText(commentType, withFooter=0) + "\n\n" + comment.body)
     addLastUpdateReply(comment)
+    return 1
   else:
     #I need to replace the entire message
     comment.edit(commentText)
     addLastUpdateReply(comment)
+    return 1
    
 def addLastUpdateReply(comment):
   #check to see if reply exists
@@ -127,15 +130,16 @@ def postComment(commentType, submission, optInfo = ""):
         if (G_DEBUG):
           print "Already commented. Editing existing comment."
         if (G_COMMENTS_ON != 1):
-          return
-        editComment(commentType, commentText, comment)
+          return 0
+        return editComment(commentType, commentText, comment)
         #comment.edit(commentText + "\n\n*Last updated: " + getTime() + "*")
         return
     if (G_COMMENTS_ON != 1):
-      return
+      return 0
     submission.add_comment(commentText)
+    return 0 #new comment, don't need to set flair
   except:
-    return
+    return 0
 
 def getTime():
   tz = timezone(G_TIMEZONE)
@@ -345,8 +349,8 @@ while (1):
         postComment(G_TYPE_CANTVIEW, sub)
       elif ((_html.find("Your search did not match any HITs.") != -1) or (_html.find("There are no more available HITs in this group.") != -1)):
         print "HIT dead."
-        postComment(G_TYPE_DEADHIT, sub)
-        if (G_SETFLAIR_ON == 1):
+        res = postComment(G_TYPE_DEADHIT, sub)
+        if ((G_SETFLAIR_ON == 1) and (res == 1)):
           subreddit.set_flair(sub, 'Dead', 'dead')
       else:
         if (G_VERBOSE):
@@ -360,16 +364,15 @@ while (1):
       
         if (_reqid != ""):
           print "ReqId:", _reqid
-          postComment(G_TYPE_INFO, sub, _reqid)
+          res = postComment(G_TYPE_INFO, sub, _reqid)
+          if ((G_SETFLAIR_ON == 1) and (res == 1)):
+            subreddit.set_flair(sub) #clears flair
         else:
           print "Cannot find RequesterId."
-        if (G_SETFLAIR_ON == 1):
-          subreddit.set_flair(sub) #clears flair
     
       #print urllib2.unquote(sub.selftext_html) #or sub.selftext
       #for com in sub.comments:
       #  print com.body
   except:
     print "Error retrieving subs."
-    continue    
-  
+    continue
