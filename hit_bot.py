@@ -1,12 +1,15 @@
 import praw
+import urllib
 import urllib2
 import random
 #from time import gmtime, strftime
 from datetime import datetime
 from pytz import timezone
 import time
+from types import *
 
-G_ADFLYAPI = "http://api.adf.ly/api.php?key=XXXXXXXXX&uid=XXXXXXX&advert_type=int&domain=adf.ly&url="
+G_ADFLYAPI = "http://api.adf.ly/api.php?key=XXXXXXXXXX&uid=XXXX&advert_type=int&domain=adf.ly&url="
+G_ADFLYDESCRAMBLER = "http://adf.ly/shortener/go"
 
 G_TYPE_BADURL = 10
 G_TYPE_UNHANDLEDHTTP = 20
@@ -20,7 +23,11 @@ G_MSG_CANTVIEW = "Unable to view HIT because of qualification requirements."
 G_MSG_ADFLYDELETED = "Unable to check HIT because the Adf.ly link has been deleted."
 G_MSG_UNHANDLEDURL = "Unable to check HIT because a url returned an unhandled error code. Error code: #errcode#"
 G_MSG_BADURL = "Unable to check HIT because a url for #sitename# returned a 404 Not Found error."
-G_MSG_BOTINFO = "*[I am a bot](http://www.reddit.com/r/hit_bot/), and this action was performed automatically.  I am designed to help determine when HITs are no longer available.  Please [contact the mods of this subreddit](http://www.reddit.com/message/compose?to=%2Fr%2F#subname#) if you have any questions or concerns.*"
+G_MSG_BOTINFO = "*[I am a bot](http://www.reddit.com/r/hit_bot/), and this action was performed automatically.  I am designed to help determine when HITs 
+
+are no longer available.  Please [contact the mods of this subreddit](http://www.reddit.com/message/compose?to=%2Fr%2F#subname#) if you have any questions 
+
+or concerns.*"
 G_MSG_LINK = "*Support your local programmer! [#link#](#link#)*"
 G_MSG_DEADHIT = "Dead HIT @ #time#."
 G_MSG_RESURRECTED = "Resurrected @ #time#."
@@ -112,6 +119,8 @@ def editComment(commentType, commentText, comment):
    
 def addLastUpdateReply(comment):
   #check to see if reply exists
+  if (G_DEBUG):
+    print "Updating last update reply."
   if (len(comment.replies) > 0):
     for rep in comment.replies:
       if (rep.author.name == G_ME):
@@ -124,20 +133,26 @@ def addLastUpdateReply(comment):
 def postComment(commentType, submission, optInfo = ""):
   try:
     commentText = getCommentText(commentType, optInfo)
+    submission.replace_more_comments(limit=None, threshold=0)
     for comment in submission.comments:
-      #print dir(comment)
+      #print dir(comment.author)
+      if (isinstance(comment.author,NoneType)):
+        continue
+      #print comment.author.name
       if (comment.author.name == G_ME):
         if (G_DEBUG):
           print "Already commented. Editing existing comment."
         if (G_COMMENTS_ON != 1):
           return 0
         return editComment(commentType, commentText, comment)
-        #comment.edit(commentText + "\n\n*Last updated: " + getTime() + "*")
     if (G_COMMENTS_ON != 1):
       return 0
     submission.add_comment(commentText)
     return 0 #new comment, don't need to set flair
-  except:
+  except Exception as e:
+    print "###ERROR###"
+    print e
+    print "###########"
     return 0
 
 def getTime():
@@ -148,7 +163,9 @@ def getTime():
   #return strftime("%I:%M%p GMT", gmtime())
 
 def getSite():
-  sites = ['http://www.randomkittengenerator.com/','http://www.animal-photos.org/shuffle/','http://www.outdoor-photos.com/shuffle/','http://ivyjoy.com/quote.shtml','http://www.cybersalt.org/clean-jokes/random-jokes','http://www.gcfl.net/randomfunny.php']
+  sites = ['http://www.randomkittengenerator.com/','http://www.animal-photos.org/shuffle/','http://www.outdoor-
+
+photos.com/shuffle/','http://ivyjoy.com/quote.shtml','http://www.cybersalt.org/clean-jokes/random-jokes','http://www.gcfl.net/randomfunny.php']
   s = random.randint(0,len(sites)-1)
   return sites[s]
 
@@ -268,11 +285,108 @@ def init():
     print "Set flair is OFF."
   print "#############################################################"
  
-     
+
+def postToAdflyDescrambler(scramble):
+  try:
+    args = { 'zzz':scramble }
+    enc_args = urllib.urlencode(args)
+    resp = urllib2.urlopen(G_ADFLYDESCRAMBLER, enc_args)
+    html = resp.read()
+  except urllib2.HTTPError, e:
+    if (e.code == 404):
+      print "Error descrambling ad.fly: 404"
+    else:
+      print "Error descrambling ad.fly:", e.code	
+    return ""
+  except:
+    return ""
+  return html
+
+
+def processSub(sub):
+  print "################"
+  print sub.title
+  _html = ""
+  _url = ""
+  
+  #attempt to parse link from title comment
+  _url = parseURL(sub.selftext_html)
+  if (_url == ""):
+    print "No link found."
+    return
+  
+  #if a link is found, check to see if it's adf.ly or mturk.com
+  if ((_url.find("mturk.com") == -1) and (_url.find("adf.ly") == -1) and (_url.find("j.gs") == -1) and (_url.find("q.gs") == -1)):
+    print "Not a supported link."
+    return
+
+  #if not a direct mturk.com link, go to adf.ly and parse it	
+  _url = getURLFromADFLY(_url, sub)
+  if (_url == ""):
+    return;
+
+  #at this point, the URL should be for mturk
+  if (_url.find("mturk.com") == -1):
+    #try to post to ad.fly descrambler
+    _url = postToAdflyDescrambler(_url)
+    if (_url.find("mturk.com") == -1):
+      print "Descramble failed or not a supported link."
+      return
+
+  #if the user has qualifications turned on, turn them off
+  #I haven't noticed that this makes a difference.
+  if (_url.find("qualifiedFor=on") != -1):
+    _url = _url.replace("qualifiedFor=on", "qualifiedFor=off")
+
+  #try and retrieve the HIT
+  _html = getMTurkHTML(_url, sub)
+  if (_html == ""):
+    return;
+
+  print _url
+  if (_html.find("Your Qualifications do not meet the requirements to preview HITs in this group.") != -1):
+    print "Cannot view HIT."
+    postComment(G_TYPE_CANTVIEW, sub)
+  elif ((_html.find("Your search did not match any HITs.") != -1) or (_html.find("There are no more available HITs in this group.") != -1)):
+    print "HIT dead."
+    res = postComment(G_TYPE_DEADHIT, sub)
+    if (G_DEBUG):
+      if (res == 1):
+        print "Comment is different, updating."
+      else:
+        print "Comment is the same."
+    if ((G_SETFLAIR_ON == 1) and (res == 1)):
+      if (G_DEBUG):
+        print "Setting dead flair."
+      subreddit.set_flair(sub, 'Dead', 'dead')
+  else:
+    if (G_VERBOSE):
+      print "Turk HTML:", _html
+    print "HIT still active."
+    
+    #try and parse requesterId
+    #<a href="/mturk/searchbar?selectedSearchType=hitgroups&amp;requesterId=A23NM9GEAV0LLA">Kirsten M</a>
+    #<input type="hidden" name="requesterId" value="A1DGSB2GKASN7Q">
+    _reqid = parseRequesterID(_html)
+  
+    if (_reqid != ""):
+      print "ReqId:", _reqid
+      res = postComment(G_TYPE_INFO, sub, _reqid)
+      if (G_DEBUG):
+        if (res == 1):
+          print "Comment is different, updating."
+        else:
+          print "Comment is the same."
+      if ((G_SETFLAIR_ON == 1) and (res == 1)):
+        if (G_DEBUG):
+          print "Clearing flair."
+        subreddit.set_flair(sub) #clears flair
+    else:
+      print "Cannot find RequesterId."
 
 r = praw.Reddit(user_agent=G_USER_AGENT)
 
-uname = "HIT_Bot"
+uname = "uname"
 passwd = "passwd"
 r.login(uname,passwd)
 
@@ -281,21 +395,16 @@ subreddit = r.get_subreddit(G_SUBREDDIT_NAME)
 init()
 
 G_DEBUG_SUB = ""
-#G_DEBUG_SUB = "http://www.reddit.com/r/HITsWorthTurkingFor/comments/18budr/us_political_attitudes_and_personality_jarret/"
+#G_DEBUG_SUB = "http://www.reddit.com/r/HITsWorthTurkingFor/comments/1b4zi6/us_sports_fan_study_mturk_research_252_min_95/"
 
 if (G_DEBUG_SUB != ""):
-  G_COMMENTS_ON = 0
-  sub = r.get_submission(G_DEBUG_SUB)
-  print sub.selftext_html
-  _url = parseURL(sub.selftext_html)
-  print "url parsed from comment:", _url
-  _url = getURLFromADFLY(_url, sub)
-  print "url after adfly parse:", _url
-  _html = getMTurkHTML(_url, sub)
-  if (_html == ""):
-    print "error retrieving html"
-  _reqid = parseRequesterID(_html)
-  print "request id:", _reqid
+  G_COMMENTS_ON = 1
+  G_SETFLAIR_ON = 0
+  while (1):
+    print "Sleeping..."
+    time.sleep(10)
+    sub = r.get_submission(G_DEBUG_SUB)
+    processSub(sub)
   exit()
 
 
@@ -306,72 +415,8 @@ while (1):
   time.sleep(45)
   try:
     for sub in subreddit.get_hot(limit=50):
-      print "################"
-      print sub.title
-      _html = ""
-      _url = ""
-      
-      #attempt to parse link from title comment
-      _url = parseURL(sub.selftext_html)
-      if (_url == ""):
-        print "No link found."
-        continue
-      
-      #if a link is found, check to see if it's adf.ly or mturk.com
-      if ((_url.find("mturk.com") == -1) and (_url.find("adf.ly") == -1) and (_url.find("j.gs") == -1) and (_url.find("q.gs") == -1)):
-        print "Not a supported link."
-        continue
-    
-      #if not a direct mturk.com link, go to adf.ly and parse it	
-      _url = getURLFromADFLY(_url, sub)
-      if (_url == ""):
-        continue;
-    
-      #at this point, the URL should be for mturk
-      if (_url.find("mturk.com") == -1):
-        print "Not a supported link."
-        continue
-    
-      #if the user has qualifications turned on, turn them off
-      #I haven't noticed that this makes a difference.
-      if (_url.find("qualifiedFor=on") != -1):
-        _url = _url.replace("qualifiedFor=on", "qualifiedFor=off")
-    
-      #try and retrieve the HIT
-      _html = getMTurkHTML(_url, sub)
-      if (_html == ""):
-        continue;
-    
-      print _url
-      if (_html.find("Your Qualifications do not meet the requirements to preview HITs in this group.") != -1):
-        print "Cannot view HIT."
-        postComment(G_TYPE_CANTVIEW, sub)
-      elif ((_html.find("Your search did not match any HITs.") != -1) or (_html.find("There are no more available HITs in this group.") != -1)):
-        print "HIT dead."
-        res = postComment(G_TYPE_DEADHIT, sub)
-        if ((G_SETFLAIR_ON == 1) and (res == 1)):
-          subreddit.set_flair(sub, 'Dead', 'dead')
-      else:
-        if (G_VERBOSE):
-          print "Turk HTML:", _html
-        print "HIT still active."
-        
-        #try and parse requesterId
-        #<a href="/mturk/searchbar?selectedSearchType=hitgroups&amp;requesterId=A23NM9GEAV0LLA">Kirsten M</a>
-        #<input type="hidden" name="requesterId" value="A1DGSB2GKASN7Q">
-        _reqid = parseRequesterID(_html)
-      
-        if (_reqid != ""):
-          print "ReqId:", _reqid
-          res = postComment(G_TYPE_INFO, sub, _reqid)
-          if ((G_SETFLAIR_ON == 1) and (res == 1)):
-            subreddit.set_flair(sub) #clears flair
-        else:
-          print "Cannot find RequesterId."
-    
-      #print urllib2.unquote(sub.selftext_html) #or sub.selftext
-      #for com in sub.comments:
-      #  print com.body
+      processSub(sub)
   except:
     print "Error retrieving subs."
-    continue
+    continue    
+  
